@@ -1,0 +1,62 @@
+{
+  "name": "@geoportallux/lux-3dviewer-plugin-statesync",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "prepublishOnly": "vcmplugin build",
+    "build": "vcmplugin build",
+    "bundle": "vcmplugin bundle",
+    "start": "vcmplugin serve",
+    "preview": "vcmplugin preview",
+    "buildStagingApp": "vcmplugin buildStagingApp",
+    "lint:js": "eslint . --ext .vue,.js,.cjs,.mjs,.ts,.cts,.mts",
+    "lint:prettier": "prettier --check .",
+    "lint": "npm run lint:js && npm run lint:prettier",
+    "format": "prettier --write --list-different . && npm run lint:js -- --fix",
+    "test": "vitest",
+    "coverage": "vitest run --coverage",
+    "type-check": "vue-tsc --noEmit",
+    "ensure-types": "vcmplugin ensure-types"
+  },
+  "author": "author <email>",
+  "license": "GPL-3.0",
+  "overrides": {
+    "esbuild": "^0.25.0",
+    "@zip.js/zip.js": "2.7.68"
+  },
+  "keywords": [
+    "vcmap",
+    "plugin"
+  ],
+  "files": [
+    "src/",
+    "dist/",
+    "plugin-assets/",
+    "LICENSE.md",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "exports": {
+    ".": "dist/index.js",
+    "./dist": "./dist/index.js"
+  },
+  "prettier": "@vcsuite/eslint-config/prettier.js",
+  "peerDependencies": {
+    "@vcmap/core": "^6.3.8",
+    "@vcmap/ui": "^6.3.8"
+  },
+  "devDependencies": {
+    "@vcmap/plugin-cli": "^4.2.0",
+    "@vcsuite/eslint-config": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.8",
+    "jest-canvas-mock": "^2.5.2",
+    "jsdom": "^29.1.1",
+    "resize-observer-polyfill": "^1.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.8",
+    "vue-tsc": "^3.3.4"
+  },
+  "mapVersion": "^6.3"
+}
