@@ -43,10 +43,12 @@ describe('stateSync', () => {
   });
 
   describe('normalizeState', () => {
-    it('rounds the active viewpoint to drop floating point jitter', () => {
+    it('drops the volatile name and rounds the active viewpoint', () => {
       const state: AppState = {
         ...getValidState(),
         activeViewpoint: {
+          type: 'Viewpoint',
+          name: 'some-random-uuid',
           cameraPosition: [6.123456789, 49.987654321, 1234.56789],
           groundPosition: [6.111111111, 49.222222222, 0.123456],
           distance: 1234.56789,
@@ -56,6 +58,7 @@ describe('stateSync', () => {
         },
       };
       expect(normalizeState(state).activeViewpoint).toEqual({
+        type: 'Viewpoint',
         cameraPosition: [6.1234568, 49.9876543, 1234.57],
         groundPosition: [6.1111111, 49.2222222, 0.12],
         distance: 1234.57,
@@ -225,20 +228,24 @@ describe('stateSync', () => {
       }
     });
 
-    it('does not write again on sub-precision viewpoint jitter from re-renders', async () => {
+    it('does not write again on volatile viewpoint changes from re-renders', async () => {
       const setItem = vi.spyOn(Storage.prototype, 'setItem');
       try {
         stubApp.getState.mockResolvedValue({
           ...getValidState(),
-          activeViewpoint: { cameraPosition: [6.1234567, 49.7654321, 300] },
+          activeViewpoint: {
+            name: 'uuid-1',
+            cameraPosition: [6.1234567, 49.7654321, 300],
+          },
         });
         stopStateSync = startStateSync(app);
         stubApp.maps.activeMap?.postRender.raiseEvent(undefined);
         await flushThrottle();
-        // a re-render reads the camera again with last-digit float noise
+        // a re-render reads the camera again: fresh uuid name + last-digit noise
         stubApp.getState.mockResolvedValue({
           ...getValidState(),
           activeViewpoint: {
+            name: 'uuid-2',
             cameraPosition: [6.12345671, 49.76543209, 300.0000001],
           },
         });

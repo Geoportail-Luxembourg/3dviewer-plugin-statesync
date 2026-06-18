@@ -57,10 +57,12 @@ function isAppState(value: unknown): value is AppState {
   );
 }
 
-// the active viewpoint is read from the live camera on every getState call,
-// so its floating point values jitter in their last digits frame to frame.
-// Rounding keeps an idle camera serializing identically, so a re-render alone
-// does not trigger a write — coordinates to ~1cm, angles to ~0.001°.
+// the active viewpoint is read from the live camera on every getState call.
+// It is volatile in two ways: it gets a fresh uuid `name` each call, and its
+// floating point values jitter in their last digits frame to frame. Dropping
+// the name and rounding the numbers keeps an idle camera serializing
+// identically, so a re-render alone does not trigger a write — coordinates to
+// ~1cm, angles to ~0.001°.
 const COORDINATE_DECIMALS = 7;
 const HEIGHT_DECIMALS = 2;
 const ANGLE_DECIMALS = 3;
@@ -86,6 +88,8 @@ export function normalizeState(state: AppState): AppState {
     return state;
   }
   const normalizedViewpoint = { ...viewpoint };
+  // a camera-derived viewpoint gets a fresh uuid name on every read
+  delete normalizedViewpoint.name;
   if (Array.isArray(viewpoint.cameraPosition)) {
     normalizedViewpoint.cameraPosition = roundCoordinate(
       viewpoint.cameraPosition,
