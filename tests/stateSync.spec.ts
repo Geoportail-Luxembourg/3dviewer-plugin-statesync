@@ -7,6 +7,7 @@ import {
   STATE_KEY,
   getCachedAppState,
   setCachedAppState,
+  normalizeState,
   readStoredState,
   restoreStateFromLocalStorage,
   startStateSync,
@@ -38,6 +39,36 @@ describe('stateSync', () => {
       const app = new VcsUiApp();
       expect(getCachedAppState(app)).toEqual(createEmptyState());
       app.destroy();
+    });
+  });
+
+  describe('normalizeState', () => {
+    it('rounds the active viewpoint to drop floating point jitter', () => {
+      const state: AppState = {
+        ...getValidState(),
+        activeViewpoint: {
+          cameraPosition: [6.123456789, 49.987654321, 1234.56789],
+          groundPosition: [6.111111111, 49.222222222, 0.123456],
+          distance: 1234.56789,
+          heading: 12.3456789,
+          pitch: -45.6789012,
+          roll: 0.0009999,
+        },
+      };
+      expect(normalizeState(state).activeViewpoint).toEqual({
+        cameraPosition: [6.1234568, 49.9876543, 1234.57],
+        groundPosition: [6.1111111, 49.2222222, 0.12],
+        distance: 1234.57,
+        heading: 12.346,
+        pitch: -45.679,
+        roll: 0.001,
+      });
+    });
+
+    it('returns the state unchanged when there is no active viewpoint', () => {
+      const state = getValidState();
+      delete state.activeViewpoint;
+      expect(normalizeState(state)).toBe(state);
     });
   });
 
@@ -187,6 +218,31 @@ describe('stateSync', () => {
         stubApp.layers.stateChanged.raiseEvent(undefined);
         await flushThrottle();
         stubApp.layers.stateChanged.raiseEvent(undefined);
+        await flushThrottle();
+        expect(setItem).toHaveBeenCalledOnce();
+      } finally {
+        setItem.mockRestore();
+      }
+    });
+
+    it('does not write again on sub-precision viewpoint jitter from re-renders', async () => {
+      const setItem = vi.spyOn(Storage.prototype, 'setItem');
+      try {
+        stubApp.getState.mockResolvedValue({
+          ...getValidState(),
+          activeViewpoint: { cameraPosition: [6.1234567, 49.7654321, 300] },
+        });
+        stopStateSync = startStateSync(app);
+        stubApp.maps.activeMap?.postRender.raiseEvent(undefined);
+        await flushThrottle();
+        // a re-render reads the camera again with last-digit float noise
+        stubApp.getState.mockResolvedValue({
+          ...getValidState(),
+          activeViewpoint: {
+            cameraPosition: [6.12345671, 49.76543209, 300.0000001],
+          },
+        });
+        stubApp.maps.activeMap?.postRender.raiseEvent(undefined);
         await flushThrottle();
         expect(setItem).toHaveBeenCalledOnce();
       } finally {

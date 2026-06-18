@@ -57,6 +57,60 @@ function isAppState(value: unknown): value is AppState {
   );
 }
 
+// the active viewpoint is read from the live camera on every getState call,
+// so its floating point values jitter in their last digits frame to frame.
+// Rounding keeps an idle camera serializing identically, so a re-render alone
+// does not trigger a write — coordinates to ~1cm, angles to ~0.001°.
+const COORDINATE_DECIMALS = 7;
+const HEIGHT_DECIMALS = 2;
+const ANGLE_DECIMALS = 3;
+
+function roundTo(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function roundCoordinate(coordinate: number[]): number[] {
+  return coordinate.map((value, index) =>
+    roundTo(value, index < 2 ? COORDINATE_DECIMALS : HEIGHT_DECIMALS),
+  );
+}
+
+/**
+ * Returns a copy of the state with the active viewpoint rounded, so an
+ * unchanged view yields a stable serialization for change detection.
+ */
+export function normalizeState(state: AppState): AppState {
+  const viewpoint = state.activeViewpoint;
+  if (!viewpoint) {
+    return state;
+  }
+  const normalizedViewpoint = { ...viewpoint };
+  if (Array.isArray(viewpoint.cameraPosition)) {
+    normalizedViewpoint.cameraPosition = roundCoordinate(
+      viewpoint.cameraPosition,
+    );
+  }
+  if (Array.isArray(viewpoint.groundPosition)) {
+    normalizedViewpoint.groundPosition = roundCoordinate(
+      viewpoint.groundPosition,
+    );
+  }
+  if (typeof viewpoint.distance === 'number') {
+    normalizedViewpoint.distance = roundTo(viewpoint.distance, HEIGHT_DECIMALS);
+  }
+  if (typeof viewpoint.heading === 'number') {
+    normalizedViewpoint.heading = roundTo(viewpoint.heading, ANGLE_DECIMALS);
+  }
+  if (typeof viewpoint.pitch === 'number') {
+    normalizedViewpoint.pitch = roundTo(viewpoint.pitch, ANGLE_DECIMALS);
+  }
+  if (typeof viewpoint.roll === 'number') {
+    normalizedViewpoint.roll = roundTo(viewpoint.roll, ANGLE_DECIMALS);
+  }
+  return { ...state, activeViewpoint: normalizedViewpoint };
+}
+
 export function readStoredState(): AppState | undefined {
   const json = getFromLocalStorage(name, STATE_KEY);
   if (!json) {
@@ -121,7 +175,7 @@ export function startStateSync(app: VcsUiApp): () => void {
       app
         .getState(true)
         .then((state) => {
-          const json = JSON.stringify(state);
+          const json = JSON.stringify(normalizeState(state));
           if (json !== lastWritten) {
             setToLocalStorage(name, STATE_KEY, json);
             lastWritten = json;
