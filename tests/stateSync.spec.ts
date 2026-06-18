@@ -161,15 +161,36 @@ describe('stateSync', () => {
   });
 
   describe('startStateSync', () => {
+    type FakeMap = {
+      postRender: VcsEvent<unknown>;
+      getViewpoint: ReturnType<typeof vi.fn>;
+    };
     type StubApp = {
       layers: { stateChanged: VcsEvent<unknown> };
       clippingPolygons: { stateChanged: VcsEvent<unknown> };
       maps: {
         mapActivated: VcsEvent<unknown>;
-        activeMap: { postRender: VcsEvent<unknown> } | null;
+        activeMap: FakeMap | null;
       };
       getState: ReturnType<typeof vi.fn>;
     };
+
+    // a Viewpoint-like result as returned by map.getViewpoint()
+    function viewpointResult(vp: object): {
+      isValid: () => boolean;
+      toJSON: () => object;
+    } {
+      return { isValid: () => true, toJSON: () => vp };
+    }
+
+    function makeMap(vp?: object): FakeMap {
+      return {
+        postRender: new VcsEvent(),
+        getViewpoint: vi
+          .fn()
+          .mockResolvedValue(vp ? viewpointResult(vp) : null),
+      };
+    }
 
     let stubApp: StubApp;
     let app: VcsUiApp;
@@ -182,7 +203,7 @@ describe('stateSync', () => {
         clippingPolygons: { stateChanged: new VcsEvent() },
         maps: {
           mapActivated: new VcsEvent(),
-          activeMap: { postRender: new VcsEvent() },
+          activeMap: makeMap(),
         },
         getState: vi.fn().mockResolvedValue(getValidState()),
       };
@@ -199,9 +220,10 @@ describe('stateSync', () => {
       await vi.advanceTimersByTimeAsync(1000);
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
     }
 
-    it('persists the app state once per throttle window', async () => {
+    it('persists the app state once per throttle window on discrete changes', async () => {
       stopStateSync = startStateSync(app);
       stubApp.layers.stateChanged.raiseEvent(undefined);
       stubApp.layers.stateChanged.raiseEvent(undefined);
@@ -228,28 +250,38 @@ describe('stateSync', () => {
       }
     });
 
-    it('does not write again on volatile viewpoint changes from re-renders', async () => {
+    it('does not call getState while the view is idle (no warning spam)', async () => {
+      stubApp.maps.activeMap = makeMap({ cameraPosition: [6.1, 49.7, 300] });
+      stopStateSync = startStateSync(app);
+      // first render establishes the baseline and writes once
+      stubApp.maps.activeMap.postRender.raiseEvent(undefined);
+      await flushThrottle();
+      expect(stubApp.getState).toHaveBeenCalledOnce();
+      stubApp.getState.mockClear();
+      // subsequent idle renders must not call the expensive getState
+      for (let i = 0; i < 3; i += 1) {
+        stubApp.maps.activeMap.postRender.raiseEvent(undefined);
+        // eslint-disable-next-line no-await-in-loop
+        await flushThrottle();
+      }
+      expect(stubApp.getState).not.toHaveBeenCalled();
+    });
+
+    it('does not write on sub-precision viewpoint jitter from re-renders', async () => {
+      const map = makeMap({ cameraPosition: [6.1234567, 49.7654321, 300] });
+      stubApp.maps.activeMap = map;
       const setItem = vi.spyOn(Storage.prototype, 'setItem');
       try {
-        stubApp.getState.mockResolvedValue({
-          ...getValidState(),
-          activeViewpoint: {
-            name: 'uuid-1',
-            cameraPosition: [6.1234567, 49.7654321, 300],
-          },
-        });
         stopStateSync = startStateSync(app);
-        stubApp.maps.activeMap?.postRender.raiseEvent(undefined);
+        map.postRender.raiseEvent(undefined);
         await flushThrottle();
-        // a re-render reads the camera again: fresh uuid name + last-digit noise
-        stubApp.getState.mockResolvedValue({
-          ...getValidState(),
-          activeViewpoint: {
-            name: 'uuid-2',
+        // a re-render reads the camera again with last-digit float noise
+        map.getViewpoint.mockResolvedValue(
+          viewpointResult({
             cameraPosition: [6.12345671, 49.76543209, 300.0000001],
-          },
-        });
-        stubApp.maps.activeMap?.postRender.raiseEvent(undefined);
+          }),
+        );
+        map.postRender.raiseEvent(undefined);
         await flushThrottle();
         expect(setItem).toHaveBeenCalledOnce();
       } finally {
@@ -257,13 +289,18 @@ describe('stateSync', () => {
       }
     });
 
-    it('writes the changed state on viewpoint changes (postRender)', async () => {
+    it('writes the changed state on real viewpoint movement (postRender)', async () => {
+      const map = makeMap({ cameraPosition: [6.1, 49.7, 300] });
+      stubApp.maps.activeMap = map;
       stopStateSync = startStateSync(app);
-      stubApp.maps.activeMap?.postRender.raiseEvent(undefined);
+      map.postRender.raiseEvent(undefined);
       await flushThrottle();
-      const changedState = { ...getValidState(), activeViewpoint: undefined };
+      const changedState = { ...getValidState(), activeMap: 'ObliqueMap' };
       stubApp.getState.mockResolvedValue(changedState);
-      stubApp.maps.activeMap?.postRender.raiseEvent(undefined);
+      map.getViewpoint.mockResolvedValue(
+        viewpointResult({ cameraPosition: [7.2, 50.1, 800] }),
+      );
+      map.postRender.raiseEvent(undefined);
       await flushThrottle();
       expect(localStorage.getItem(storageKey)).toEqual(
         JSON.stringify(changedState),
@@ -273,22 +310,28 @@ describe('stateSync', () => {
     it('rebinds the postRender listener on map activation', async () => {
       stubApp.maps.activeMap = null;
       stopStateSync = startStateSync(app);
-      const newMap = { postRender: new VcsEvent<unknown>() };
+      const newMap = makeMap({ cameraPosition: [6.1, 49.7, 300] });
+      stubApp.maps.activeMap = newMap;
       stubApp.maps.mapActivated.raiseEvent(newMap);
       await flushThrottle();
       stubApp.getState.mockClear();
+      // a real camera move on the newly activated map must trigger a persist
+      newMap.getViewpoint.mockResolvedValue(
+        viewpointResult({ cameraPosition: [7.2, 50.1, 800] }),
+      );
       newMap.postRender.raiseEvent(undefined);
       await flushThrottle();
       expect(stubApp.getState).toHaveBeenCalledOnce();
     });
 
     it('stops persisting once disposed', async () => {
+      const map = stubApp.maps.activeMap!;
       stopStateSync = startStateSync(app);
       stopStateSync();
       stopStateSync = undefined;
       stubApp.layers.stateChanged.raiseEvent(undefined);
       stubApp.clippingPolygons.stateChanged.raiseEvent(undefined);
-      stubApp.maps.activeMap?.postRender.raiseEvent(undefined);
+      map.postRender.raiseEvent(undefined);
       await flushThrottle();
       expect(stubApp.getState).not.toHaveBeenCalled();
       expect(localStorage.getItem(storageKey)).toBeNull();

@@ -1,4 +1,4 @@
-import type { VcsEvent, VcsMap } from '@vcmap/core';
+import type { VcsEvent, VcsMap, ViewpointOptions } from '@vcmap/core';
 import type { AppState, VcsUiApp } from '@vcmap/ui';
 import {
   getFromLocalStorage,
@@ -79,40 +79,48 @@ function roundCoordinate(coordinate: number[]): number[] {
 }
 
 /**
- * Returns a copy of the state with the active viewpoint rounded, so an
+ * Returns a copy of the viewpoint without its volatile uuid name and with its
+ * numbers rounded, so an unchanged view yields a stable serialization.
+ */
+export function normalizeViewpoint(
+  viewpoint: ViewpointOptions,
+): ViewpointOptions {
+  const normalized = { ...viewpoint };
+  // a camera-derived viewpoint gets a fresh uuid name on every read
+  delete normalized.name;
+  if (Array.isArray(viewpoint.cameraPosition)) {
+    normalized.cameraPosition = roundCoordinate(viewpoint.cameraPosition);
+  }
+  if (Array.isArray(viewpoint.groundPosition)) {
+    normalized.groundPosition = roundCoordinate(viewpoint.groundPosition);
+  }
+  if (typeof viewpoint.distance === 'number') {
+    normalized.distance = roundTo(viewpoint.distance, HEIGHT_DECIMALS);
+  }
+  if (typeof viewpoint.heading === 'number') {
+    normalized.heading = roundTo(viewpoint.heading, ANGLE_DECIMALS);
+  }
+  if (typeof viewpoint.pitch === 'number') {
+    normalized.pitch = roundTo(viewpoint.pitch, ANGLE_DECIMALS);
+  }
+  if (typeof viewpoint.roll === 'number') {
+    normalized.roll = roundTo(viewpoint.roll, ANGLE_DECIMALS);
+  }
+  return normalized;
+}
+
+/**
+ * Returns a copy of the state with the active viewpoint normalized, so an
  * unchanged view yields a stable serialization for change detection.
  */
 export function normalizeState(state: AppState): AppState {
-  const viewpoint = state.activeViewpoint;
-  if (!viewpoint) {
+  if (!state.activeViewpoint) {
     return state;
   }
-  const normalizedViewpoint = { ...viewpoint };
-  // a camera-derived viewpoint gets a fresh uuid name on every read
-  delete normalizedViewpoint.name;
-  if (Array.isArray(viewpoint.cameraPosition)) {
-    normalizedViewpoint.cameraPosition = roundCoordinate(
-      viewpoint.cameraPosition,
-    );
-  }
-  if (Array.isArray(viewpoint.groundPosition)) {
-    normalizedViewpoint.groundPosition = roundCoordinate(
-      viewpoint.groundPosition,
-    );
-  }
-  if (typeof viewpoint.distance === 'number') {
-    normalizedViewpoint.distance = roundTo(viewpoint.distance, HEIGHT_DECIMALS);
-  }
-  if (typeof viewpoint.heading === 'number') {
-    normalizedViewpoint.heading = roundTo(viewpoint.heading, ANGLE_DECIMALS);
-  }
-  if (typeof viewpoint.pitch === 'number') {
-    normalizedViewpoint.pitch = roundTo(viewpoint.pitch, ANGLE_DECIMALS);
-  }
-  if (typeof viewpoint.roll === 'number') {
-    normalizedViewpoint.roll = roundTo(viewpoint.roll, ANGLE_DECIMALS);
-  }
-  return { ...state, activeViewpoint: normalizedViewpoint };
+  return {
+    ...state,
+    activeViewpoint: normalizeViewpoint(state.activeViewpoint),
+  };
 }
 
 export function readStoredState(): AppState | undefined {
@@ -162,39 +170,76 @@ export function restoreStateFromLocalStorage(app: VcsUiApp): void {
   setCachedAppState(app, stored);
 }
 
+async function readViewpointKey(app: VcsUiApp): Promise<string> {
+  const map = app.maps.activeMap;
+  if (!map) {
+    return '';
+  }
+  try {
+    const viewpoint = await map.getViewpoint();
+    if (viewpoint?.isValid?.()) {
+      return JSON.stringify(normalizeViewpoint(viewpoint.toJSON()));
+    }
+  } catch {
+    // ignore: no valid viewpoint yet
+  }
+  return '';
+}
+
 /**
  * Continuously persists the app state to the localStorage, throttled to one
  * write per second. Returns a dispose function removing all listeners.
+ *
+ * The map fires postRender every frame, but a full `getState()` is expensive
+ * (it scans every layer and module) and is only meaningful when something
+ * changed. So a render only triggers a cheap viewpoint read; the full
+ * `getState()` runs only when the view actually moved or a discrete event
+ * (layer/clipping polygon/map change) requested it.
  */
 export function startStateSync(app: VcsUiApp): () => void {
   let lastWritten: string | undefined;
+  let lastViewpointKey: string | undefined;
+  let forced = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  function persist(): void {
-    if (timer) {
+  async function tick(): Promise<void> {
+    timer = undefined;
+    const viewpointKey = await readViewpointKey(app);
+    const viewpointChanged = viewpointKey !== lastViewpointKey;
+    lastViewpointKey = viewpointKey;
+    if (!forced && !viewpointChanged) {
       return;
     }
-    timer = setTimeout(() => {
-      timer = undefined;
-      app
-        .getState(true)
-        .then((state) => {
-          const json = JSON.stringify(normalizeState(state));
-          if (json !== lastWritten) {
-            setToLocalStorage(name, STATE_KEY, json);
-            lastWritten = json;
-          }
-        })
-        .catch(() => {
-          // getState throws as long as no map is active yet
-        });
-    }, PERSIST_THROTTLE_MS);
+    forced = false;
+    try {
+      const state = await app.getState(true);
+      const json = JSON.stringify(normalizeState(state));
+      if (json !== lastWritten) {
+        setToLocalStorage(name, STATE_KEY, json);
+        lastWritten = json;
+      }
+    } catch {
+      // getState throws as long as no map is active yet
+    }
+  }
+
+  function schedule(): void {
+    if (!timer) {
+      timer = setTimeout(() => {
+        tick().catch(() => {});
+      }, PERSIST_THROTTLE_MS);
+    }
+  }
+
+  function scheduleForced(): void {
+    forced = true;
+    schedule();
   }
 
   let postRenderListener: (() => void) | undefined;
   function bindPostRender(map: VcsMap | null): void {
     postRenderListener?.();
-    postRenderListener = map?.postRender.addEventListener(persist);
+    postRenderListener = map?.postRender.addEventListener(schedule);
   }
   bindPostRender(app.maps.activeMap);
 
@@ -207,11 +252,11 @@ export function startStateSync(app: VcsUiApp): () => void {
   ).stateChanged;
 
   const listeners = [
-    app.layers.stateChanged.addEventListener(persist),
-    clippingPolygonsStateChanged?.addEventListener(persist),
+    app.layers.stateChanged.addEventListener(scheduleForced),
+    clippingPolygonsStateChanged?.addEventListener(scheduleForced),
     app.maps.mapActivated.addEventListener((map) => {
       bindPostRender(map);
-      persist();
+      scheduleForced();
     }),
   ].filter((listener) => !!listener);
 
