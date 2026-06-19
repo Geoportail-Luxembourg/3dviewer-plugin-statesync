@@ -1,4 +1,9 @@
-import type { VcsEvent, VcsMap, ViewpointOptions } from '@vcmap/core';
+import type {
+  VcsEvent,
+  VcsMap,
+  VcsModule,
+  ViewpointOptions,
+} from '@vcmap/core';
 import type { AppState, VcsUiApp } from '@vcmap/ui';
 import {
   getFromLocalStorage,
@@ -170,6 +175,28 @@ export function restoreStateFromLocalStorage(app: VcsUiApp): void {
   setCachedAppState(app, stored);
 }
 
+/**
+ * Returns `current`, with entries from `previous` appended for names that are
+ * not in `current` and no longer exist in the app. Used to keep the persisted
+ * state of layers/clipping polygons that are temporarily absent (e.g. a layer
+ * only available while logged in), so logging out does not drop their state.
+ */
+function preserveAbsentEntries<T extends { name: string }>(
+  current: T[],
+  previous: T[],
+  exists: (name: string) => boolean,
+): T[] {
+  const currentNames = new Set(current.map((entry) => entry.name));
+  const kept = previous.filter(
+    (entry) => !currentNames.has(entry.name) && !exists(entry.name),
+  );
+  return kept.length ? [...current, ...kept] : current;
+}
+
+function getModuleId(module: VcsModule): string {
+  return module._id;
+}
+
 async function readViewpointKey(app: VcsUiApp): Promise<string> {
   const map = app.maps.activeMap;
   if (!map) {
@@ -195,12 +222,23 @@ async function readViewpointKey(app: VcsUiApp): Promise<string> {
  * changed. So a render only triggers a cheap viewpoint read; the full
  * `getState()` runs only when the view actually moved or a discrete event
  * (layer/clipping polygon/map change) requested it.
+ *
+ * State is also preserved across a module reload (e.g. the themesync plugin
+ * removing and re-adding its module on login/logout): when a module is removed,
+ * the last known layer/clipping-polygon states are re-seeded into the app's
+ * cached state, so the re-added module re-applies them. Entries for layers that
+ * are temporarily absent (only available while logged in) are kept in the
+ * persisted state instead of being dropped.
  */
 export function startStateSync(app: VcsUiApp): () => void {
   let lastWritten: string | undefined;
   let lastViewpointKey: string | undefined;
   let forced = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // last persisted state, used both as the merge baseline and to re-seed the
+  // cached state on a module reload. Initialised from the stored state so a
+  // reload that happens before the first persist is still covered.
+  let lastState: AppState | undefined = readStoredState();
 
   async function tick(): Promise<void> {
     timer = undefined;
@@ -213,14 +251,51 @@ export function startStateSync(app: VcsUiApp): () => void {
     forced = false;
     try {
       const state = await app.getState(true);
-      const json = JSON.stringify(normalizeState(state));
+      if (lastState) {
+        state.layers = preserveAbsentEntries(
+          state.layers,
+          lastState.layers,
+          (layerName) => !!app.layers.getByKey(layerName),
+        );
+        state.clippingPolygons = preserveAbsentEntries(
+          state.clippingPolygons,
+          lastState.clippingPolygons,
+          (polygonName) => !!app.clippingPolygons.getByKey(polygonName),
+        );
+      }
+      const normalized = normalizeState(state);
+      const json = JSON.stringify(normalized);
       if (json !== lastWritten) {
         setToLocalStorage(name, STATE_KEY, json);
         lastWritten = json;
       }
+      lastState = normalized;
     } catch {
       // getState throws as long as no map is active yet
     }
+  }
+
+  // Re-seed the cached state before a removed module is re-added, so the app
+  // re-applies the layer and clipping-polygon states through its own startup
+  // mechanism. Layers/polygons that no longer exist are skipped by the app.
+  // Viewpoint and active map are intentionally omitted: a module reload does
+  // not move the camera, and re-applying them could cause a jump.
+  function seedReloadState(removedModule: VcsModule): void {
+    if (!lastState) {
+      return;
+    }
+    const moduleId = getModuleId(removedModule);
+    if (moduleId === app.dynamicModuleId) {
+      return;
+    }
+    setCachedAppState(app, {
+      moduleIds: [moduleId],
+      layers: lastState.layers.map((layer) => ({ ...layer })),
+      clippingPolygons: lastState.clippingPolygons.map((polygon) => ({
+        ...polygon,
+      })),
+      plugins: [],
+    });
   }
 
   function schedule(): void {
@@ -258,6 +333,7 @@ export function startStateSync(app: VcsUiApp): () => void {
       bindPostRender(map);
       scheduleForced();
     }),
+    app.moduleRemoved.addEventListener(seedReloadState),
   ].filter((listener) => !!listener);
 
   return () => {

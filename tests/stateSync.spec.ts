@@ -166,12 +166,20 @@ describe('stateSync', () => {
       getViewpoint: ReturnType<typeof vi.fn>;
     };
     type StubApp = {
-      layers: { stateChanged: VcsEvent<unknown> };
-      clippingPolygons: { stateChanged: VcsEvent<unknown> };
+      layers: {
+        stateChanged: VcsEvent<unknown>;
+        getByKey: (k: string) => unknown;
+      };
+      clippingPolygons: {
+        stateChanged: VcsEvent<unknown>;
+        getByKey: (k: string) => unknown;
+      };
       maps: {
         mapActivated: VcsEvent<unknown>;
         activeMap: FakeMap | null;
       };
+      moduleRemoved: VcsEvent<unknown>;
+      dynamicModuleId: string;
       getState: ReturnType<typeof vi.fn>;
     };
 
@@ -199,12 +207,18 @@ describe('stateSync', () => {
     beforeEach(() => {
       vi.useFakeTimers();
       stubApp = {
-        layers: { stateChanged: new VcsEvent() },
-        clippingPolygons: { stateChanged: new VcsEvent() },
+        // by default every name "exists" in the app, so nothing is preserved
+        layers: { stateChanged: new VcsEvent(), getByKey: (): unknown => ({}) },
+        clippingPolygons: {
+          stateChanged: new VcsEvent(),
+          getByKey: (): unknown => ({}),
+        },
         maps: {
           mapActivated: new VcsEvent(),
           activeMap: makeMap(),
         },
+        moduleRemoved: new VcsEvent(),
+        dynamicModuleId: '_defaultDynamicModule',
         getState: vi.fn().mockResolvedValue(getValidState()),
       };
       app = stubApp as unknown as VcsUiApp;
@@ -343,6 +357,89 @@ describe('stateSync', () => {
       stubApp.layers.stateChanged.raiseEvent(undefined);
       await flushThrottle();
       expect(localStorage.getItem(storageKey)).toBeNull();
+    });
+
+    describe('module reload preservation (login/logout)', () => {
+      it('re-seeds the cached state on module removal so the re-add restores it', async () => {
+        stubApp.getState.mockResolvedValue(getValidState());
+        stopStateSync = startStateSync(app);
+        stubApp.layers.stateChanged.raiseEvent(undefined);
+        await flushThrottle();
+        expect(getCachedAppState(app)).toBeUndefined();
+
+        stubApp.moduleRemoved.raiseEvent({ _id: 'catalogConfig' });
+
+        // layers + clipping polygons re-seeded; viewpoint/map omitted (no jump)
+        expect(getCachedAppState(app)).toEqual({
+          moduleIds: ['catalogConfig'],
+          layers: getValidState().layers,
+          clippingPolygons: getValidState().clippingPolygons,
+          plugins: [],
+        });
+      });
+
+      it('does not re-seed on dynamic module removal', async () => {
+        stubApp.getState.mockResolvedValue(getValidState());
+        stopStateSync = startStateSync(app);
+        stubApp.layers.stateChanged.raiseEvent(undefined);
+        await flushThrottle();
+        stubApp.moduleRemoved.raiseEvent({ _id: stubApp.dynamicModuleId });
+        expect(getCachedAppState(app)).toBeUndefined();
+      });
+
+      it('keeps the state of layers that became absent from the app', async () => {
+        stubApp.getState.mockResolvedValue({
+          ...getValidState(),
+          layers: [
+            { name: 'public', active: true },
+            { name: 'restricted', active: true },
+          ],
+          clippingPolygons: [],
+        });
+        stopStateSync = startStateSync(app);
+        stubApp.layers.stateChanged.raiseEvent(undefined);
+        await flushThrottle();
+
+        // logout: the restricted layer is gone, getState only returns public
+        stubApp.getState.mockResolvedValue({
+          ...getValidState(),
+          layers: [{ name: 'public', active: true }],
+          clippingPolygons: [],
+        });
+        stubApp.layers.getByKey = (n: string): unknown =>
+          n === 'restricted' ? undefined : {};
+        stubApp.layers.stateChanged.raiseEvent(undefined);
+        await flushThrottle();
+
+        const stored = JSON.parse(localStorage.getItem(storageKey)!);
+        expect(stored.layers).toEqual([
+          { name: 'public', active: true },
+          { name: 'restricted', active: true },
+        ]);
+      });
+
+      it('drops the state of a layer that still exists but is no longer active', async () => {
+        stubApp.getState.mockResolvedValue({
+          ...getValidState(),
+          layers: [{ name: 'X', active: true }],
+          clippingPolygons: [],
+        });
+        stopStateSync = startStateSync(app);
+        stubApp.layers.stateChanged.raiseEvent(undefined);
+        await flushThrottle();
+
+        // X is deactivated: getState excludes it, but X still exists in the app
+        stubApp.getState.mockResolvedValue({
+          ...getValidState(),
+          layers: [],
+          clippingPolygons: [],
+        });
+        stubApp.layers.stateChanged.raiseEvent(undefined);
+        await flushThrottle();
+
+        const stored = JSON.parse(localStorage.getItem(storageKey)!);
+        expect(stored.layers).toEqual([]);
+      });
     });
   });
 });
