@@ -1,6 +1,10 @@
 import type { VcsPlugin, VcsUiApp, PluginConfigEditor } from '@vcmap/ui';
 import { name, version, mapVersion } from '../package.json';
-import { restoreStateFromLocalStorage, startStateSync } from './stateSync.js';
+import {
+  clearStateUrlParam,
+  restoreStateFromLocalStorage,
+  startStateSync,
+} from './stateSync.js';
 
 type PluginConfig = Record<never, never>;
 type PluginState = Record<never, never>;
@@ -23,6 +27,10 @@ export default function plugin(): StateSyncPlugin {
     initialize(vcsUiApp: VcsUiApp): Promise<void> {
       // must run synchronously, before any module the state applies to is loaded
       restoreStateFromLocalStorage(vcsUiApp);
+      // the app has already read the state URL parameter into its cached state;
+      // remove it so a reload restores from localStorage (with any in-session
+      // changes) instead of re-applying the shared URL state
+      clearStateUrlParam();
       return Promise.resolve();
     },
     onVcsAppMounted(vcsUiApp: VcsUiApp): void {

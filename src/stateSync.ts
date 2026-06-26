@@ -176,6 +176,21 @@ export function restoreStateFromLocalStorage(app: VcsUiApp): void {
 }
 
 /**
+ * Removes the `state` URL parameter after the app has read it (the app parses it
+ * once, at construction). This prevents a page reload from re-applying the shared
+ * state and overwriting the changes the user made during the session, which are
+ * kept in localStorage. Must be called after `restoreStateFromLocalStorage`,
+ * which relies on the parameter to detect that the URL takes precedence.
+ */
+export function clearStateUrlParam(): void {
+  const url = new URL(window.location.href);
+  if (url.searchParams.has('state')) {
+    url.searchParams.delete('state');
+    window.history.replaceState(window.history.state, '', url);
+  }
+}
+
+/**
  * Returns `current`, with entries from `previous` appended for names that are
  * not in `current` and no longer exist in the app. Used to keep the persisted
  * state of layers/clipping polygons that are temporarily absent (e.g. a layer

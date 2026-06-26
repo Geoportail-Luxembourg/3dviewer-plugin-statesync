@@ -10,6 +10,7 @@ import {
   normalizeState,
   readStoredState,
   restoreStateFromLocalStorage,
+  clearStateUrlParam,
   startStateSync,
 } from '../src/stateSync.js';
 
@@ -157,6 +158,30 @@ describe('stateSync', () => {
       } finally {
         warn.mockRestore();
       }
+    });
+  });
+
+  describe('clearStateUrlParam', () => {
+    afterEach(() => {
+      window.history.replaceState(null, '', window.location.pathname);
+    });
+
+    it('removes the state parameter, keeping other params', () => {
+      window.history.replaceState(null, '', '?foo=bar&state=%5B%5D');
+      clearStateUrlParam();
+      const url = new URL(window.location.href);
+      expect(url.searchParams.has('state')).toBe(false);
+      expect(url.searchParams.get('foo')).toBe('bar');
+    });
+
+    it('does nothing when there is no state parameter', () => {
+      window.history.replaceState(null, '', '?foo=bar');
+      expect(() => {
+        clearStateUrlParam();
+      }).not.toThrow();
+      const url = new URL(window.location.href);
+      expect(url.searchParams.get('foo')).toBe('bar');
+      expect(url.searchParams.has('state')).toBe(false);
     });
   });
 
