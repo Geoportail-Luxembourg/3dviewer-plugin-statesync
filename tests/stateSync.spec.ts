@@ -5,6 +5,7 @@ import { VcsUiApp, createEmptyState } from '@vcmap/ui';
 import packageJSON from '../package.json';
 import {
   STATE_KEY,
+  CUSTOM_STATE_KEY,
   getCachedAppState,
   setCachedAppState,
   normalizeState,
@@ -12,9 +13,14 @@ import {
   restoreStateFromLocalStorage,
   clearStateUrlParam,
   startStateSync,
+  readStoredCustomState,
+  handleCustomStateParam,
+  clearLangUrlParam,
+  startCustomStateSync,
 } from '../src/stateSync.js';
 
 const storageKey = `${packageJSON.name}_${STATE_KEY}`;
+const customStateKey = `${packageJSON.name}_${CUSTOM_STATE_KEY}`;
 
 function getValidState(): AppState {
   return {
@@ -465,6 +471,144 @@ describe('stateSync', () => {
         const stored = JSON.parse(localStorage.getItem(storageKey)!);
         expect(stored.layers).toEqual([]);
       });
+    });
+  });
+
+  describe('readStoredCustomState', () => {
+    it('returns the stored custom state', () => {
+      const customState = { locale: 'lb' };
+      localStorage.setItem(customStateKey, JSON.stringify(customState));
+      expect(readStoredCustomState()).toEqual(customState);
+    });
+
+    it('returns undefined if nothing is stored', () => {
+      expect(readStoredCustomState()).toBeUndefined();
+    });
+
+    it('removes invalid JSON and returns undefined', () => {
+      localStorage.setItem(customStateKey, 'not json');
+      expect(readStoredCustomState()).toBeUndefined();
+      expect(localStorage.getItem(customStateKey)).toBeNull();
+    });
+
+    it('removes JSON of the wrong shape and returns undefined', () => {
+      localStorage.setItem(customStateKey, JSON.stringify({ locale: 42 }));
+      expect(readStoredCustomState()).toBeUndefined();
+      expect(localStorage.getItem(customStateKey)).toBeNull();
+    });
+  });
+
+  describe('handleCustomStateParam', () => {
+    let app: VcsUiApp;
+
+    beforeEach(() => {
+      app = new VcsUiApp();
+    });
+
+    afterEach(() => {
+      app.destroy();
+      window.history.replaceState(null, '', window.location.pathname);
+    });
+
+    it('applies the lang URL parameter and persists it', () => {
+      window.history.replaceState(null, '', '?lang=lb');
+      handleCustomStateParam(app);
+      expect(app.locale).toBe('lb');
+      expect(readStoredCustomState()).toEqual({ locale: 'lb' });
+    });
+
+    it('restores the stored locale when there is no lang parameter', () => {
+      localStorage.setItem(customStateKey, JSON.stringify({ locale: 'fr' }));
+      handleCustomStateParam(app);
+      expect(app.locale).toBe('fr');
+    });
+
+    it('keeps the app default when there is no lang parameter and nothing stored', () => {
+      const defaultLocale = app.locale;
+      handleCustomStateParam(app);
+      expect(app.locale).toBe(defaultLocale);
+      expect(localStorage.getItem(customStateKey)).toBeNull();
+    });
+
+    it('prefers the lang URL parameter over the stored locale', () => {
+      localStorage.setItem(customStateKey, JSON.stringify({ locale: 'fr' }));
+      window.history.replaceState(null, '', '?lang=de');
+      handleCustomStateParam(app);
+      expect(app.locale).toBe('de');
+      expect(readStoredCustomState()).toEqual({ locale: 'de' });
+    });
+
+    it('preserves other custom state keys when persisting the locale', () => {
+      localStorage.setItem(customStateKey, JSON.stringify({ other: true }));
+      window.history.replaceState(null, '', '?lang=lb');
+      handleCustomStateParam(app);
+      expect(readStoredCustomState()).toEqual({ other: true, locale: 'lb' });
+    });
+  });
+
+  describe('clearLangUrlParam', () => {
+    afterEach(() => {
+      window.history.replaceState(null, '', window.location.pathname);
+    });
+
+    it('removes the lang parameter, keeping other params', () => {
+      window.history.replaceState(null, '', '?foo=bar&lang=lb');
+      clearLangUrlParam();
+      const url = new URL(window.location.href);
+      expect(url.searchParams.has('lang')).toBe(false);
+      expect(url.searchParams.get('foo')).toBe('bar');
+    });
+
+    it('does nothing when there is no lang parameter', () => {
+      window.history.replaceState(null, '', '?foo=bar');
+      expect(() => {
+        clearLangUrlParam();
+      }).not.toThrow();
+      const url = new URL(window.location.href);
+      expect(url.searchParams.get('foo')).toBe('bar');
+      expect(url.searchParams.has('lang')).toBe(false);
+    });
+  });
+
+  describe('startCustomStateSync', () => {
+    it('persists the locale when it changes', () => {
+      const localeChanged = new VcsEvent<string>();
+      const app = {
+        localeChanged,
+      } as unknown as VcsUiApp;
+      const stop = startCustomStateSync(app);
+      try {
+        localeChanged.raiseEvent('lb');
+        expect(readStoredCustomState()).toEqual({ locale: 'lb' });
+      } finally {
+        stop();
+      }
+    });
+
+    it('stops persisting after dispose', () => {
+      const localeChanged = new VcsEvent<string>();
+      const app = {
+        localeChanged,
+      } as unknown as VcsUiApp;
+      const stop = startCustomStateSync(app);
+      stop();
+      localeChanged.raiseEvent('lb');
+      expect(localStorage.getItem(customStateKey)).toBeNull();
+    });
+
+    it('preserves other custom state keys when the locale changes', () => {
+      localStorage.setItem(customStateKey, JSON.stringify({ other: true }));
+      const localeChanged = new VcsEvent<string>();
+      const app = {
+        localeChanged,
+      } as unknown as VcsUiApp;
+      const stop = startCustomStateSync(app);
+      try {
+        localeChanged.raiseEvent('de');
+        expect(readStoredCustomState()).toEqual({ other: true, locale: 'de' });
+      } finally {
+        stop();
+      }
     });
   });
 });
