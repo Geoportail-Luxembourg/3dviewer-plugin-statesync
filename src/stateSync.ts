@@ -14,6 +14,7 @@ import { name } from '../package.json';
 
 /** localStorage key, prefixed by the plugin name: `${name}_${STATE_KEY}` */
 export const STATE_KEY = 'state';
+export const CUSTOM_STATE_KEY = 'customState';
 
 const PERSIST_THROTTLE_MS = 1000;
 
@@ -361,4 +362,80 @@ export function startStateSync(app: VcsUiApp): () => void {
       unlisten();
     });
   };
+}
+
+export type CustomState = {
+  locale?: string;
+};
+
+function isCustomState(value: unknown): value is CustomState {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const state = value as CustomState;
+  return state.locale === undefined || typeof state.locale === 'string';
+}
+
+export function readStoredCustomState(): CustomState | undefined {
+  const json = getFromLocalStorage(name, CUSTOM_STATE_KEY);
+  if (!json) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (isCustomState(parsed)) {
+      return parsed;
+    }
+  } catch {
+    // invalid JSON, cleaned up below
+  }
+  removeFromLocalStorage(name, CUSTOM_STATE_KEY);
+  return undefined;
+}
+
+function writeStoredLocale(locale: string): void {
+  const stored = readStoredCustomState() ?? {};
+  if (stored.locale === locale) {
+    return;
+  }
+  setToLocalStorage(
+    name,
+    CUSTOM_STATE_KEY,
+    JSON.stringify({ ...stored, locale }),
+  );
+}
+
+function handleLang(app: VcsUiApp): void {
+  const url = new URL(window.location.href);
+  const langParam = url.searchParams.get('lang');
+  if (langParam) {
+    app.locale = langParam;
+    writeStoredLocale(langParam);
+  } else {
+    const stored = readStoredCustomState();
+    if (stored?.locale) {
+      app.locale = stored.locale;
+    } else {
+      writeStoredLocale(app.locale);
+    }
+  }
+}
+
+export function handleCustomStateParam(app: VcsUiApp): void {
+  handleLang(app);
+}
+
+export function clearLangUrlParam(): void {
+  const url = new URL(window.location.href);
+  if (url.searchParams.has('lang')) {
+    url.searchParams.delete('lang');
+    window.history.replaceState(window.history.state, '', url);
+  }
+}
+
+export function startCustomStateSync(app: VcsUiApp): () => void {
+  app.localeChanged.addEventListener((locale) => {
+    writeStoredLocale(locale);
+  });
+  return () => {};
 }
