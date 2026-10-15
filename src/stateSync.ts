@@ -405,11 +405,6 @@ function writeStoredLocale(locale: string): void {
   );
 }
 
-/**
- * Applies the locale to the app: the `lang` URL parameter takes priority and
- * is persisted to localStorage, otherwise the previously stored locale is
- * restored. Must be called synchronously in the plugin's `initialize`.
- */
 function handleLang(app: VcsUiApp): void {
   const url = new URL(window.location.href);
   const langParam = url.searchParams.get('lang');
@@ -430,11 +425,6 @@ export function handleCustomStateParam(app: VcsUiApp): void {
   handleLang(app);
 }
 
-/**
- * Removes the `lang` URL parameter after it has been consumed, so a page
- * reload restores the locale (with any in-session changes) from localStorage
- * instead of re-applying the shared URL locale.
- */
 export function clearLangUrlParam(): void {
   const url = new URL(window.location.href);
   if (url.searchParams.has('lang')) {
@@ -443,16 +433,9 @@ export function clearLangUrlParam(): void {
   }
 }
 
-/**
- * Persists the locale to localStorage whenever it changes in the app.
- * Returns a dispose function removing the listener.
- */
 export function startCustomStateSync(app: VcsUiApp): () => void {
-  const listener = (locale: string): void => {
+  app.localeChanged.addEventListener((locale) => {
     writeStoredLocale(locale);
-  };
-  app.localeChanged.addEventListener(listener);
-  return () => {
-    app.localeChanged.removeEventListener(listener);
-  };
+  });
+  return () => {};
 }

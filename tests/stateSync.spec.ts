@@ -585,7 +585,7 @@ describe('stateSync', () => {
       }
     });
 
-    it('stops persisting after dispose', () => {
+    it('keeps persisting after dispose (listener intentionally lives with the app)', () => {
       const localeChanged = new VcsEvent<string>();
       const app = {
         localeChanged,
@@ -593,7 +593,7 @@ describe('stateSync', () => {
       const stop = startCustomStateSync(app);
       stop();
       localeChanged.raiseEvent('lb');
-      expect(localStorage.getItem(customStateKey)).toBeNull();
+      expect(readStoredCustomState()).toEqual({ locale: 'lb' });
     });
 
     it('preserves other custom state keys when the locale changes', () => {
