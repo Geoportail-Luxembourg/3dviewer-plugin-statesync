@@ -4,6 +4,9 @@ import {
   clearStateUrlParam,
   restoreStateFromLocalStorage,
   startStateSync,
+  handleCustomStateParam,
+  clearLangUrlParam,
+  startCustomStateSync,
 } from './stateSync.js';
 
 type PluginConfig = Record<never, never>;
@@ -13,6 +16,7 @@ type StateSyncPlugin = VcsPlugin<PluginConfig, PluginState>;
 
 export default function plugin(): StateSyncPlugin {
   let stopStateSync: (() => void) | undefined;
+  let stopCustomStateSync: (() => void) | undefined;
 
   return {
     get name(): string {
@@ -27,14 +31,18 @@ export default function plugin(): StateSyncPlugin {
     initialize(vcsUiApp: VcsUiApp): Promise<void> {
       // must run synchronously, before any module the state applies to is loaded
       restoreStateFromLocalStorage(vcsUiApp);
+      handleCustomStateParam(vcsUiApp);
       // the app has already read the state URL parameter into its cached state;
       // remove it so a reload restores from localStorage (with any in-session
-      // changes) instead of re-applying the shared URL state
+      // changes) instead of re-applying the shared URL state. Same for `lang`,
+      // which was just applied and persisted above.
       clearStateUrlParam();
+      clearLangUrlParam();
       return Promise.resolve();
     },
     onVcsAppMounted(vcsUiApp: VcsUiApp): void {
       stopStateSync = startStateSync(vcsUiApp);
+      stopCustomStateSync = startCustomStateSync(vcsUiApp);
     },
     /**
      * should return all default values of the configuration
@@ -64,6 +72,8 @@ export default function plugin(): StateSyncPlugin {
     destroy(): void {
       stopStateSync?.();
       stopStateSync = undefined;
+      stopCustomStateSync?.();
+      stopCustomStateSync = undefined;
     },
   };
 }
