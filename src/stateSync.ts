@@ -420,6 +420,8 @@ function handleLang(app: VcsUiApp): void {
     const stored = readStoredCustomState();
     if (stored?.locale) {
       app.locale = stored.locale;
+    } else {
+      writeStoredLocale(app.locale);
     }
   }
 }

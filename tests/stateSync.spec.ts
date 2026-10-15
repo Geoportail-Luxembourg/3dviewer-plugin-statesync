@@ -523,11 +523,11 @@ describe('stateSync', () => {
       expect(app.locale).toBe('fr');
     });
 
-    it('keeps the app default when there is no lang parameter and nothing stored', () => {
+    it('seeds the app default locale when there is no lang parameter and nothing stored', () => {
       const defaultLocale = app.locale;
       handleCustomStateParam(app);
       expect(app.locale).toBe(defaultLocale);
-      expect(localStorage.getItem(customStateKey)).toBeNull();
+      expect(readStoredCustomState()).toEqual({ locale: defaultLocale });
     });
 
     it('prefers the lang URL parameter over the stored locale', () => {
