@@ -2,6 +2,10 @@
   "name": "@geoportallux/lux-3dviewer-plugin-statesync",
   "version": "1.1.0",
   "description": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Geoportail-Luxembourg/3dviewer-plugin-statesync.git"
+  },
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
